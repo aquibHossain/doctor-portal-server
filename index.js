@@ -1,12 +1,17 @@
 const express = require('express')
 var cors = require('cors')
 require('dotenv').config()
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb');
 var admin = require("firebase-admin");
+const fileUpload=require('express-fileupload')
+const stripe = require("stripe")(process.env.SECRET_KEY);
 const app = express()
 const port =process.env.PORT || 9000
+
 app.use(cors())
 app.use(express.json())
+app.use(fileUpload());
+
 var serviceAccount = require("./doctor-portal-726bb-firebase-adminsdk-oza6p-c8790f2766.json");
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
@@ -16,14 +21,11 @@ const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology:
 async function verifyToken(req,res,next){
   if(req.headers?.authorization?.startsWith('Bearer ')){
        const token=req.headers.authorization.split(' ')[1]
-       console.log(token);
        try{
           const decodedUser=await admin.auth().verifyIdToken(token)
           req.decodedEmail=decodedUser.email
        }
-       catch{
-         
-       }
+       catch{}
   }
   next()
 }
@@ -33,6 +35,8 @@ async function run() {
       const database = client.db("doctor-portal");
       const appointment = database.collection("appointment");
       const userCollection = database.collection("Users");
+      const doctorCollection = database.collection("doctors");
+
      app.post('/appointments',async(req,res)=>{
       const appointments=req.body
       const result = await appointment.insertOne(appointments)
@@ -42,10 +46,30 @@ async function run() {
         const email=req.query.email
         const date=new Date(req.query.date).toLocaleDateString()
         const query={email:email,date:date}
-        console.log(query);
           const cursor =  appointment.find(query);
           const service=await cursor.toArray()
         res.json(service)
+      })
+      app.get('/appointments/:id',async(req,res)=>{
+        const id=req.params.id 
+        const query={_id:ObjectId(id)}
+        console.log(id);
+          const cursor = await appointment.findOne(query);
+        res.json(cursor)
+      })
+      app.put('/appointments/:id',async(req,res)=>{
+        const id=req.params.id 
+        const payment=req.body
+        const filter={_id:ObjectId(id)}
+        const updateDoc = {
+          $set:
+          {
+            payment:payment
+
+          }
+        };
+        const result = await appointment.updateOne(filter, updateDoc);
+        res.json(result)
       })
       
       // app.put('/users/:id',async(req,res)=>{
@@ -55,6 +79,26 @@ async function run() {
       // app.delete('/users/:id',async(req,res)=>{
         
       // })
+      app.post('/doctor',async(req,res)=>{
+        const email=req.body.email
+        const name=req.body.name
+        const pic=req.files.img
+        const picdata=pic.data
+        const encodeddata=picdata.toString('base64');
+        const imgBuffer=Buffer.from(encodeddata,'base64')
+        const doctor={
+          name,
+          email,
+          image:imgBuffer
+        }
+        const result = await doctorCollection.insertOne(doctor)
+        res.json(result)
+    })
+    app.get('/doctor',async(req,res)=>{
+      const cursor =  doctorCollection.find({});
+      const file= await cursor.toArray()
+      res.json(file)
+    })
       app.post('/users',async(req,res)=>{
         const users=req.body
         console.log(users);
@@ -101,6 +145,20 @@ async function run() {
               }
               res.json({admin:isAdmin})
             })
+
+
+            app.post("/create-payment-intent", async (req, res) => {
+              const paymentInfo = req.body;
+            const amount=paymentInfo.price*100
+              const paymentIntent = await stripe.paymentIntents.create({
+                amount: amount,
+                currency:'usd',
+                payment_method_types:['card']
+              });
+              res.json({
+                clientSecret: paymentIntent.client_secret
+              });
+            });
     } finally {
     //   await client.close();
     }
